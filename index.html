@@ -9,12 +9,12 @@
     <!-- Firebase SDK -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAuth, onAuthStateChanged, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
 
         const statusEl = document.getElementById('user-id-display');
         
-        // 您的 Firebase 配置
+        // Firebase 配置
         let firebaseConfig = {
             apiKey: "AIzaSyAsp2XCNiECnmArNhWmj08BrivTEWlIbx0",
             authDomain: "yuna-b97ea.firebaseapp.com",
@@ -34,18 +34,18 @@
             const auth = getAuth(app);
             const db = getFirestore(app);
             
-            // 使用固定的路徑 ID 以確保資料持久化
-            const appId = "yuna-sales-v1"; 
+            // 使用環境提供的 appId 或自定義
+            const currentAppId = typeof __app_id !== 'undefined' ? __app_id : "yuna-sales-shared-v1"; 
 
             let salesData = [];
             let target1 = 1000000;
             let target2 = 2000000;
             let currentUser = null;
 
-            // 認證流程
+            // 1. 執行登入 (規則 3: 先登入再查詢)
             const initAuth = async () => {
                 try {
-                    statusEl.textContent = "⚙️ 正在檢查雲端權限...";
+                    statusEl.textContent = "⚙️ 正在連線雲端資料庫...";
                     if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                         await signInWithCustomToken(auth, __initial_auth_token);
                     } else {
@@ -53,36 +53,39 @@
                     }
                 } catch (error) {
                     console.error("Auth Error:", error);
-                    statusEl.innerHTML = `❌ 認證失敗：${error.code}`;
+                    statusEl.innerHTML = `<span class="text-red-400">❌ 連線失敗: ${error.code}</span>`;
                 }
             };
 
+            // 2. 監聽登入狀態變化
             onAuthStateChanged(auth, (user) => {
                 currentUser = user;
                 if (user) {
-                    statusEl.innerHTML = `<span class="text-green-400">●</span> 雲端已連線 | User: ${user.uid.substring(0, 8)}`;
-                    setupSync(user.uid, db, appId);
+                    statusEl.innerHTML = `<span class="text-green-400">●</span> 雲端同步中 (已建立安全連線)`;
+                    setupSync(db, currentAppId);
                 }
             });
 
             initAuth();
 
-            function setupSync(userId, db, appId) {
-                // 監聽銷售紀錄 - 嚴格遵守 RULE 1 的路徑規範
-                const salesRef = collection(db, 'artifacts', appId, 'users', userId, 'sales');
+            function setupSync(db, appId) {
+                // 明確路徑：/artifacts/{appId}/public/data/sales
+                const salesRef = collection(db, 'artifacts', appId, 'public', 'data', 'sales');
                 
-                // 成功回調與錯誤回調並存
+                // 監聽銷售紀錄清單 (增加錯誤處理以捕捉權限問題)
                 onSnapshot(salesRef, (snapshot) => {
                     salesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    console.log("數據更新:", salesData);
+                    salesData.sort((a, b) => new Date(b.date) - new Date(a.date));
                     updateUI();
                 }, (error) => {
-                    console.error("Firestore 監聽失敗:", error);
-                    statusEl.innerHTML = `<span class="text-red-400">❌ 同步權限遭拒</span> (請檢查 Firestore Rules)`;
+                    console.error("Snapshot Error:", error);
+                    if (error.code === 'permission-denied') {
+                        statusEl.innerHTML = `<span class="text-red-400 font-bold">❌ 權限被拒：請檢查 Firebase Rules 中的 artifacts 路徑</span>`;
+                    }
                 });
 
-                // 監聽配置
-                const configRef = doc(db, 'artifacts', appId, 'users', userId, 'config', 'settings');
+                // 監聽目標金額設定：/artifacts/{appId}/public/data/config/settings
+                const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'settings');
                 onSnapshot(configRef, (docSnap) => {
                     if (docSnap.exists()) {
                         const data = docSnap.data();
@@ -114,141 +117,168 @@
                     table.innerHTML = '';
                 } else {
                     document.getElementById('emptyState').style.display = 'none';
-                    table.innerHTML = salesData
-                        .sort((a, b) => new Date(b.date) - new Date(a.date))
-                        .map((item) => `
-                            <tr class="border-b border-white/5">
-                                <td class="py-4 pl-4 text-white/70 font-mono">${item.date}</td>
-                                <td class="py-4 font-bold text-pink-200">$${(Number(item.amount) || 0).toLocaleString()}</td>
-                                <td class="py-4 text-right pr-4">
-                                    <button onclick="deleteRecord('${item.id}')" class="text-pink-200/40 hover:text-red-400">✕</button>
-                                </td>
-                            </tr>
-                        `).join('');
+                    table.innerHTML = salesData.map((item) => `
+                        <tr class="border-b border-white/5 animate-fade-in">
+                            <td class="py-4 pl-4 text-white/70 font-mono text-sm">${item.date}</td>
+                            <td class="py-4 font-bold text-pink-200">$${(Number(item.amount) || 0).toLocaleString()}</td>
+                            <td class="py-4 text-right pr-4">
+                                <button onclick="deleteRecord('${item.id}')" class="text-pink-200/30 hover:text-red-400 transition-colors p-2">✕</button>
+                            </td>
+                        </tr>
+                    `).join('');
                 }
             }
 
             window.addRecord = async function() {
-                if (!currentUser) {
-                    alert("尚未連線，請稍後...");
-                    return;
-                }
+                if (!currentUser) return;
                 const date = document.getElementById('dateInput').value;
                 const amountInput = document.getElementById('amountInput');
                 const amount = parseFloat(amountInput.value);
                 
                 if (!date || isNaN(amount)) {
-                    alert("請輸入日期與有效金額");
+                    alert("請填寫正確的日期與金額");
                     return;
                 }
 
                 try {
-                    const salesCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'sales');
+                    const salesCol = collection(db, 'artifacts', currentAppId, 'public', 'data', 'sales');
                     await addDoc(salesCol, { 
                         date: date, 
                         amount: amount, 
-                        timestamp: Date.now() 
+                        createdAt: serverTimestamp() 
                     });
                     amountInput.value = '';
-                    console.log("儲存成功");
                 } catch (e) { 
-                    console.error("儲存失敗:", e);
-                    alert("儲存失敗！錯誤代碼：" + e.code + "\n請確認 Firestore Rules 是否已發佈。");
+                    console.error("Add Doc Error:", e);
+                    alert("儲存失敗：權限遭拒。請確認您的 Firebase Rules 是否正確包含 match /artifacts/...");
                 }
             };
 
             window.deleteRecord = async function(docId) {
-                if (!currentUser) return;
-                if (!confirm('確定刪除這筆紀錄？')) return;
+                if (!currentUser || !confirm('確定要刪除這筆紀錄嗎？')) return;
                 try {
-                    await deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'sales', docId));
-                } catch (e) { alert("刪除失敗: " + e.message); }
+                    await deleteDoc(doc(db, 'artifacts', currentAppId, 'public', 'data', 'sales', docId));
+                } catch (e) { alert("刪除失敗"); }
             };
 
             window.saveConfig = async function() {
                 if (!currentUser) return;
                 try {
-                    const configRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'config', 'settings');
+                    const configRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'config', 'settings');
                     await setDoc(configRef, { 
                         target1: parseFloat(document.getElementById('targetInput').value) || 0,
                         target2: parseFloat(document.getElementById('target2Input').value) || 0
-                    });
-                } catch (e) { console.error(e); }
+                    }, { merge: true });
+                } catch (e) { console.error("Save Config Error:", e); }
             };
 
             document.getElementById('targetInput').onchange = window.saveConfig;
             document.getElementById('target2Input').onchange = window.saveConfig;
 
         } catch (err) {
-            console.error(err);
+            console.error("Initialization Error:", err);
         }
 
         document.getElementById('dateInput').valueAsDate = new Date();
     </script>
     <style>
         :root { --soft-pink: #ffb7c5; --deep-base: #1a1617; }
-        body { background-color: var(--deep-base); color: #fceef0; background-image: radial-gradient(circle at 50% -20%, #4a2f35 0%, #1a1617 100%); min-height: 100vh; }
+        body { 
+            background-color: var(--deep-base); 
+            color: #fceef0; 
+            background-image: radial-gradient(circle at 50% -20%, #4a2f35 0%, #1a1617 100%); 
+            min-height: 100vh; 
+            font-family: -apple-system, "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
         .card { background: rgba(45, 38, 40, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 183, 197, 0.1); }
+        input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.5; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out forwards; }
+        
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 183, 197, 0.2); border-radius: 10px; }
     </style>
 </head>
-<body class="p-6">
-    <div class="max-w-5xl mx-auto">
-        <header class="mb-10 text-center">
-            <h1 class="text-4xl font-black text-pink-100 mb-2">Sales Diary</h1>
-            <div id="user-id-display" class="text-[11px] text-pink-400 font-mono">準備中...</div>
+<body class="p-4 md:p-8">
+    <div class="max-w-4xl mx-auto">
+        <header class="mb-8 text-center">
+            <h1 class="text-3xl md:text-5xl font-black text-pink-100 mb-2 tracking-tight">Sales Diary</h1>
+            <div id="user-id-display" class="text-[11px] text-pink-400 font-mono tracking-widest uppercase opacity-60">System Ready...</div>
         </header>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-            <div class="card rounded-3xl p-5">
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-8">
+            <div class="card rounded-2xl p-4">
                 <p class="text-[10px] text-pink-200/50 mb-1 uppercase text-center">基礎目標</p>
-                <input type="number" id="targetInput" value="1000000" class="bg-transparent text-xl font-bold text-white w-full text-center outline-none">
+                <input type="number" id="targetInput" class="bg-transparent text-lg font-bold text-white w-full text-center outline-none">
             </div>
-            <div class="card rounded-3xl p-5">
+            <div class="card rounded-2xl p-4">
                 <p class="text-[10px] text-pink-200/50 mb-1 uppercase text-center">挑戰目標</p>
-                <input type="number" id="target2Input" value="2000000" class="bg-transparent text-xl font-bold text-white w-full text-center outline-none">
+                <input type="number" id="target2Input" class="bg-transparent text-lg font-bold text-white w-full text-center outline-none">
             </div>
-            <div class="card rounded-3xl p-5 bg-white/5">
-                <p class="text-[10px] text-pink-200/50 mb-1 uppercase text-center">累積金額</p>
-                <p class="text-2xl font-black text-white text-center" id="totalDisplay">$0</p>
+            <div class="card rounded-2xl p-4 bg-pink-500/10 border-pink-500/20">
+                <p class="text-[10px] text-pink-200/50 mb-1 uppercase text-center">目前累積</p>
+                <p class="text-xl md:text-2xl font-black text-white text-center" id="totalDisplay">$0</p>
             </div>
-            <div class="card rounded-3xl p-5">
-                <p class="text-[10px] text-pink-200/50 mb-1 uppercase text-center">目標差距</p>
-                <p class="text-xl font-bold text-pink-200 text-center" id="gapDisplay">$0</p>
-            </div>
-        </div>
-
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
-            <div class="card rounded-2xl p-6">
-                <div class="flex justify-between mb-2 text-xs"><span>基礎進度</span><span id="percentDisplay">0%</span></div>
-                <div class="h-2 w-full bg-white/5 rounded-full overflow-hidden">
-                    <div id="progressBar" class="h-full bg-pink-300 transition-all duration-1000 w-0"></div>
-                </div>
-            </div>
-            <div class="card rounded-2xl p-6">
-                <div class="flex justify-between mb-2 text-xs"><span>挑戰進度</span><span id="percentDisplay2">0%</span></div>
-                <div class="h-2 w-full bg-white/5 rounded-full overflow-hidden">
-                    <div id="progressBar2" class="h-full bg-pink-500 transition-all duration-1000 w-0"></div>
-                </div>
+            <div class="card rounded-2xl p-4">
+                <p class="text-[10px] text-pink-200/50 mb-1 uppercase text-center">尚差金額</p>
+                <p class="text-lg md:text-xl font-bold text-pink-200 text-center" id="gapDisplay">$0</p>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <section class="card rounded-3xl p-8">
-                <h2 class="text-lg font-bold mb-6">新增單筆數據</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
+            <div class="card rounded-2xl p-5">
+                <div class="flex justify-between mb-2 text-xs font-bold uppercase tracking-wider text-pink-200/70">
+                    <span>基礎目標進度</span>
+                    <span id="percentDisplay" class="text-pink-300">0%</span>
+                </div>
+                <div class="h-3 w-full bg-white/5 rounded-full overflow-hidden">
+                    <div id="progressBar" class="h-full bg-gradient-to-r from-pink-400 to-pink-300 transition-all duration-1000 w-0 shadow-[0_0_15px_rgba(244,114,182,0.4)]"></div>
+                </div>
+            </div>
+            <div class="card rounded-2xl p-5">
+                <div class="flex justify-between mb-2 text-xs font-bold uppercase tracking-wider text-pink-200/70">
+                    <span>挑戰目標進度</span>
+                    <span id="percentDisplay2" class="text-pink-500">0%</span>
+                </div>
+                <div class="h-3 w-full bg-white/5 rounded-full overflow-hidden">
+                    <div id="progressBar2" class="h-full bg-gradient-to-r from-pink-600 to-pink-400 transition-all duration-1000 w-0 shadow-[0_0_15px_rgba(219,39,119,0.4)]"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-5 gap-8">
+            <section class="card rounded-3xl p-6 md:p-8 lg:col-span-2">
+                <h2 class="text-lg font-bold mb-6 flex items-center gap-2">
+                    <span class="w-2 h-2 bg-pink-400 rounded-full"></span>
+                    新增業績紀錄
+                </h2>
                 <div class="space-y-4">
-                    <input type="date" id="dateInput" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white">
-                    <input type="number" id="amountInput" placeholder="請輸入金額" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-lg font-bold">
-                    <button onclick="addRecord()" class="w-full bg-pink-300 hover:bg-pink-200 text-gray-900 font-bold py-4 rounded-xl transition-colors">確認儲存</button>
+                    <div>
+                        <label class="text-[10px] text-pink-200/40 uppercase mb-1 block ml-1">選擇日期</label>
+                        <input type="date" id="dateInput" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-4 text-white outline-none focus:border-pink-300/50 transition-colors">
+                    </div>
+                    <div>
+                        <label class="text-[10px] text-pink-200/40 uppercase mb-1 block ml-1">輸入業績金額</label>
+                        <input type="number" id="amountInput" placeholder="0" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-4 text-white text-2xl font-black outline-none focus:border-pink-300/50 transition-colors">
+                    </div>
+                    <button onclick="addRecord()" class="w-full bg-pink-300 hover:bg-pink-200 text-gray-900 font-bold py-5 rounded-2xl shadow-xl active:scale-[0.97] transition-all text-lg">確認儲存並同步</button>
                 </div>
             </section>
             
-            <section class="card rounded-3xl p-6 h-[400px] flex flex-col">
-                <h2 class="text-lg font-bold mb-4">歷史數據清單</h2>
-                <div class="flex-grow overflow-y-auto pr-2">
+            <section class="card rounded-3xl p-6 flex flex-col lg:col-span-3 h-[500px]">
+                <h2 class="text-lg font-bold mb-4 flex items-center gap-2">
+                    <span class="w-2 h-2 bg-pink-200/30 rounded-full"></span>
+                    歷史數據清單
+                </h2>
+                <div class="flex-grow overflow-y-auto custom-scrollbar">
                     <table class="w-full text-left">
                         <tbody id="recordTable"></tbody>
                     </table>
-                    <div id="emptyState" class="py-20 text-center text-pink-200/20 italic">尚未有任何數據</div>
+                    <div id="emptyState" class="py-24 text-center">
+                        <p class="text-pink-200/20 italic text-sm">目前雲端沒有任何數據</p>
+                    </div>
                 </div>
             </section>
         </div>
