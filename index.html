@@ -29,12 +29,282 @@
         // 初始化身份驗證 (遵守規則 3: 先認證再查詢)
         const initAuth = async () => {
             try {
-                statusEl.textContent = "正在認證身份...";
+                statusEl.textContent = "正在連線至雲端...";
                 if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                     await signInWithCustomToken(auth, __initial_auth_token);
                 } else {
                     await signInAnonymously(auth);
                 }
+            } catch (error) {
+                console.error("認證錯誤:", error);
+                statusEl.textContent = "連線失敗，請檢查網路。";
+            }
+        };
+
+        onAuthStateChanged(auth, (user) => {
+            currentUser = user;
+            if (user) {
+                statusEl.textContent = `雲端已連線 | ID: ${user.uid.substring(0, 8)}...`;
+                setupSync(user.uid);
+            }
+        });
+
+        initAuth();
+
+        // 設置雲端同步監聽 (遵守規則 1: 嚴格路徑)
+        function setupSync(userId) {
+            if (!userId) return;
+
+            // 監聽營業紀錄
+            const salesRef = collection(db, 'artifacts', appId, 'users', userId, 'sales');
+            onSnapshot(salesRef, (snapshot) => {
+                salesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                updateUI();
+                if (document.getElementById('emptyState').textContent === "讀取雲端數據中...") {
+                    document.getElementById('emptyState').textContent = "暫無數據";
+                }
+            }, (error) => {
+                console.error("同步錯誤:", error);
+                statusEl.textContent = "連線中斷";
+            });
+
+            // 監聽目標設定
+            const configRef = doc(db, 'artifacts', appId, 'users', userId, 'config', 'settings');
+            onSnapshot(configRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    target1 = data.target1 || 1000000;
+                    target2 = data.target2 || 2000000;
+                    document.getElementById('targetInput').value = target1;
+                    document.getElementById('target2Input').value = target2;
+                    updateUI();
+                }
+            }, (error) => console.error("配置同步錯誤:", error));
+        }
+
+        // 更新介面顯示
+        window.updateUI = function() {
+            const total = salesData.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+            const gap = Math.max(0, target2 - total);
+            const p1 = target1 > 0 ? Math.min(100, (total / target1 * 100)) : 0;
+            const p2 = target2 > 0 ? Math.min(100, (total / target2 * 100)) : 0;
+
+            document.getElementById('totalDisplay').textContent = `$${total.toLocaleString()}`;
+            document.getElementById('gapDisplay').textContent = `$${gap.toLocaleString()}`;
+            document.getElementById('percentDisplay').textContent = `${p1.toFixed(1)}%`;
+            document.getElementById('percentDisplay2').textContent = `${p2.toFixed(1)}%`;
+            document.getElementById('progressBar').style.width = `${p1}%`;
+            document.getElementById('progressBar2').style.width = `${p2}%`;
+
+            const table = document.getElementById('recordTable');
+            const empty = document.getElementById('emptyState');
+            
+            if (salesData.length === 0) {
+                empty.style.display = 'block';
+                table.innerHTML = '';
+            } else {
+                empty.style.display = 'none';
+                table.innerHTML = salesData
+                    .sort((a, b) => new Date(b.date) - new Date(a.date))
+                    .map((item) => `
+                        <tr class="border-b border-white/5 hover:bg-white/5 transition-all">
+                            <td class="py-5 pl-4 text-white/70 font-mono">${item.date}</td>
+                            <td class="py-5 font-bold text-pink-200">$${(Number(item.amount) || 0).toLocaleString()}</td>
+                            <td class="py-5 text-right pr-4">
+                                <button onclick="deleteRecord('${item.id}')" class="w-8 h-8 rounded-full hover:bg-red-500/20 text-pink-200 opacity-30 hover:opacity-100">✕</button>
+                            </td>
+                        </tr>
+                    `).join('');
+            }
+        };
+
+        window.addRecord = async function() {
+            if (!currentUser) {
+                alert("尚未連接雲端，請稍候。");
+                return;
+            }
+            const date = document.getElementById('dateInput').value;
+            const amount = parseFloat(document.getElementById('amountInput').value);
+            if (!date || isNaN(amount)) return;
+
+            try {
+                const salesCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'sales');
+                const newDoc = doc(salesCol);
+                await setDoc(newDoc, { date, amount, createdAt: Date.now() });
+                document.getElementById('amountInput').value = '';
+            } catch (e) {
+                console.error("儲存失敗:", e);
+            }
+        };
+
+        window.deleteRecord = async function(docId) {
+            if (!currentUser || !docId) return;
+            if (confirm('確定要刪除這筆紀錄嗎？')) {
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'sales', docId);
+                    await deleteDoc(docRef);
+                } catch (e) {
+                    console.error("刪除失敗:", e);
+                }
+            }
+        };
+
+        window.saveConfig = async function() {
+            if (!currentUser) return;
+            try {
+                const configRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'config', 'settings');
+                await setDoc(configRef, { 
+                    target1: parseFloat(document.getElementById('targetInput').value) || 0,
+                    target2: parseFloat(document.getElementById('target2Input').value) || 0
+                });
+            } catch (e) {
+                console.error("設定保存失敗:", e);
+            }
+        };
+
+        document.getElementById('targetInput').onchange = saveConfig;
+        document.getElementById('target2Input').onchange = saveConfig;
+        document.getElementById('dateInput').valueAsDate = new Date();
+    </script>
+    <style>
+        :root {
+            --soft-pink: #ffb7c5;
+            --accent-pink: #f8a5c2;
+            --deep-base: #1a1617;
+            --card-bg: rgba(45, 38, 40, 0.7);
+        }
+        body {
+            background-color: var(--deep-base);
+            color: #fceef0;
+            font-family: "PingFang TC", "Heiti TC", "Microsoft JhengHei", sans-serif;
+            background-image: radial-gradient(circle at 50% -20%, #4a2f35 0%, #1a1617 100%);
+            min-height: 100vh;
+            margin: 0;
+            -webkit-font-smoothing: antialiased;
+        }
+        .pink-glow {
+            text-shadow: 0 0 20px rgba(255, 183, 197, 0.5);
+        }
+        .card {
+            background: var(--card-bg);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 183, 197, 0.2);
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .card:hover {
+            border-color: var(--soft-pink);
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(255, 183, 197, 0.2);
+        }
+        .progress-fill {
+            transition: width 1.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.05); }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--soft-pink); border-radius: 10px; }
+    </style>
+</head>
+<body class="p-4 md:p-10">
+    <div class="max-w-6xl mx-auto">
+        <!-- 標題與雲端狀態 -->
+        <header class="mb-12 text-center">
+            <h1 class="text-5xl md:text-7xl font-black tracking-tighter text-pink-100 pink-glow mb-4">Sales Diary</h1>
+            <div class="flex flex-col items-center gap-2">
+                <p class="text-pink-300 opacity-60 uppercase tracking-[0.5em] text-xs font-bold">雲端同步管理系統</p>
+                <span id="user-id-display" class="text-[9px] text-pink-400 opacity-40 font-mono italic text-center">正在建立雲端安全連線...</span>
+            </div>
+        </header>
+
+        <!-- 數據核心 -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
+            <div class="card rounded-[2.5rem] p-6 text-center">
+                <p class="text-pink-200 opacity-60 text-[10px] font-black mb-3 tracking-widest uppercase">基礎目標</p>
+                <div class="flex items-center justify-center gap-1">
+                    <span class="text-xl font-light text-pink-300">$</span>
+                    <input type="number" id="targetInput" class="bg-transparent text-2xl font-bold text-white w-32 text-center border-b border-pink-200 border-opacity-10 focus:border-opacity-100 transition-all outline-none">
+                </div>
+            </div>
+            <div class="card rounded-[2.5rem] p-6 text-center border-pink-400/30">
+                <p class="text-pink-200 opacity-60 text-[10px] font-black mb-3 tracking-widest uppercase">挑戰目標</p>
+                <div class="flex items-center justify-center gap-1">
+                    <span class="text-xl font-light text-pink-300">$</span>
+                    <input type="number" id="target2Input" class="bg-transparent text-2xl font-bold text-white w-32 text-center border-b border-pink-200 border-opacity-10 focus:border-opacity-100 transition-all outline-none">
+                </div>
+            </div>
+            <div class="card rounded-[2.5rem] p-6 text-center bg-white/5">
+                <p class="text-pink-200 opacity-60 text-[10px] font-black mb-3 tracking-widest uppercase">目前累積總額</p>
+                <p class="text-3xl font-black text-white" id="totalDisplay">$0</p>
+            </div>
+            <div class="card rounded-[2.5rem] p-6 text-center">
+                <p class="text-pink-200 opacity-60 text-[10px] font-black mb-3 tracking-widest uppercase">距離挑戰差額</p>
+                <p class="text-2xl font-bold text-pink-200" id="gapDisplay">$0</p>
+            </div>
+        </div>
+
+        <!-- 進度條 -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
+            <div class="card rounded-3xl p-7">
+                <div class="flex justify-between items-end mb-4">
+                    <span class="text-xs font-bold text-pink-200 opacity-70 uppercase tracking-widest">基礎進度</span>
+                    <span id="percentDisplay" class="text-2xl font-black text-pink-200">0%</span>
+                </div>
+                <div class="h-4 w-full bg-white/5 rounded-full overflow-hidden">
+                    <div id="progressBar" class="progress-fill h-full bg-pink-300 shadow-[0_0_20px_rgba(255,183,197,0.6)]" style="width: 0%"></div>
+                </div>
+            </div>
+            <div class="card rounded-3xl p-7 border-pink-400/30">
+                <div class="flex justify-between items-end mb-4">
+                    <span class="text-xs font-bold text-pink-200 opacity-70 uppercase tracking-widest">挑戰進度</span>
+                    <span id="percentDisplay2" class="text-2xl font-black text-pink-400">0%</span>
+                </div>
+                <div class="h-4 w-full bg-white/5 rounded-full overflow-hidden">
+                    <div id="progressBar2" class="progress-fill h-full bg-gradient-to-r from-pink-300 to-pink-500 shadow-[0_0_25px_rgba(248,165,194,0.5)]" style="width: 0%"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
+            <!-- 輸入紀錄 -->
+            <section>
+                <div class="card rounded-[2.5rem] p-8">
+                    <h2 class="text-xl font-bold mb-6 flex items-center gap-3">
+                        <span class="w-1.5 h-6 bg-pink-300 rounded-full"></span> 新增營業數據
+                    </h2>
+                    <div class="space-y-6">
+                        <input type="date" id="dateInput" class="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-pink-300">
+                        <input type="number" id="amountInput" placeholder="請輸入金額" class="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-white text-lg font-bold outline-none focus:border-pink-300">
+                        <button onclick="addRecord()" class="w-full bg-pink-300 hover:bg-pink-200 text-gray-900 font-black py-5 rounded-2xl transition-all shadow-xl shadow-pink-500/20 uppercase tracking-widest">
+                            儲存至雲端
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 歷史紀錄 -->
+            <section>
+                <div class="card rounded-[2.5rem] p-6 flex flex-col h-full min-h-[450px]">
+                    <h2 class="text-xl font-bold mb-6 flex items-center gap-3 pl-2">
+                        <span class="w-1.5 h-6 bg-pink-300 rounded-full"></span> 雲端同步清單
+                    </h2>
+                    <div class="flex-grow overflow-y-auto custom-scrollbar pr-2">
+                        <table class="w-full text-left">
+                            <thead class="text-pink-200 opacity-40 text-[10px] font-black uppercase tracking-widest border-b border-white/10">
+                                <tr>
+                                    <th class="pb-4 pl-4">日期</th>
+                                    <th class="pb-4">金額</th>
+                                    <th class="pb-4 text-right pr-4">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody id="recordTable" class="text-sm"></tbody>
+                        </table>
+                        <div id="emptyState" class="py-24 text-center text-pink-200 opacity-20 italic">讀取雲端數據中...</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+</body>
+</html>                }
             } catch (error) {
                 console.error("認證錯誤:", error);
                 statusEl.textContent = "認證失敗，請檢查網路。";
