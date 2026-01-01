@@ -14,277 +14,241 @@
 
         const statusEl = document.getElementById('user-id-display');
         
-        // Firebase 配置處理
-        let firebaseConfig = {};
-
-        // 檢查環境：優先使用系統注入，否則使用手動填寫
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-            firebaseConfig = JSON.parse(__firebase_config);
-        } else {
-            // ==========================================================
-            // [重要] 請在下方填入您從 Firebase Console 取得的配置資訊
-            // ==========================================================
-            firebaseConfig = {
-                apiKey: "AIzaSyAsp2XCNiECnmArNhWmj08BrivTEWlIbx0",
-                authDomain:  "yuna-b97ea.firebaseapp.com",
-                projectId:  "yuna-b97ea",
-                storageBucket: "yuna-b97ea.firebasestorage.app",
-                messagingSenderId: "395010361184",
-                appId:  "1:395010361184:web:60f443c4b97198a7690005"
-            };
-        }
-
-        // 檢查 API Key 是否已填寫
-        if (!firebaseConfig.apiKey || firebaseConfig.apiKey.includes("您的")) {
-            statusEl.innerHTML = "❌ <span class='text-red-400'>配置未完成</span>：請在代碼中填入 Firebase 配置資訊。";
-        }
-
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
-        
-        // 設置唯一的 App ID，確保資料存放在正確路徑
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-sales-diary-v1';
-
-        let salesData = [];
-        let target1 = 1000000;
-        let target2 = 2000000;
-        let currentUser = null;
-
-        // 初始化身份驗證 (遵守規則 3: 先認證再執行 Firestore 操作)
-        const initAuth = async () => {
-            try {
-                statusEl.textContent = "⚙️ 正在建立雲端安全連線...";
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) {
-                console.error("Auth Error:", error);
-                statusEl.textContent = "❌ 連線失敗，請檢查網路或配置。";
-            }
+        // 您的 Firebase 配置 (已填入最新資訊)
+        let firebaseConfig = {
+            apiKey: "AIzaSyAsp2XCNiECnmArNhWmj08BrivTEWlIbx0",
+            authDomain: "yuna-b97ea.firebaseapp.com",
+            projectId: "yuna-b97ea",
+            storageBucket: "yuna-b97ea.firebasestorage.app",
+            messagingSenderId: "395010361184",
+            appId: "1:395010361184:web:60f443c4b97198a7690005",
+            measurementId: "G-H5WGX4E7XZ"
         };
 
-        onAuthStateChanged(auth, (user) => {
-            currentUser = user;
-            if (user) {
-                statusEl.innerHTML = `<span class="text-green-400">●</span> 雲端已同步 | ID: ${user.uid.substring(0, 8)}...`;
-                setupSync(user.uid);
-            }
-        });
-
-        initAuth();
-
-        // 設置即時數據同步 (遵守規則 1: 嚴格路徑結構)
-        function setupSync(userId) {
-            if (!userId) return;
-
-            // 監聽銷售紀錄
-            const salesRef = collection(db, 'artifacts', appId, 'users', userId, 'sales');
-            onSnapshot(salesRef, (snapshot) => {
-                salesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                updateUI();
-                const emptyMsg = document.getElementById('emptyState');
-                if (emptyMsg.textContent === "讀取雲端數據中...") {
-                    emptyMsg.textContent = "目前無營業紀錄";
-                }
-            }, (error) => {
-                console.error("Sales Sync Error:", error);
-                statusEl.textContent = "⚠️ 資料更新中斷";
-            });
-
-            // 監聽目標配置
-            const configRef = doc(db, 'artifacts', appId, 'users', userId, 'config', 'settings');
-            onSnapshot(configRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    target1 = data.target1 || 1000000;
-                    target2 = data.target2 || 2000000;
-                    document.getElementById('targetInput').value = target1;
-                    document.getElementById('target2Input').value = target2;
-                    updateUI();
-                }
-            });
+        // 偵測環境配置
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            firebaseConfig = JSON.parse(__firebase_config);
         }
 
-        window.updateUI = function() {
-            const total = salesData.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
-            const gap = Math.max(0, target2 - total);
-            const p1 = target1 > 0 ? Math.min(100, (total / target1 * 100)) : 0;
-            const p2 = target2 > 0 ? Math.min(100, (total / target2 * 100)) : 0;
-
-            document.getElementById('totalDisplay').textContent = `$${total.toLocaleString()}`;
-            document.getElementById('gapDisplay').textContent = `$${gap.toLocaleString()}`;
-            document.getElementById('percentDisplay').textContent = `${p1.toFixed(1)}%`;
-            document.getElementById('percentDisplay2').textContent = `${p2.toFixed(1)}%`;
-            document.getElementById('progressBar').style.width = `${p1}%`;
-            document.getElementById('progressBar2').style.width = `${p2}%`;
-
-            const table = document.getElementById('recordTable');
-            const empty = document.getElementById('emptyState');
+        try {
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            const db = getFirestore(app);
             
-            if (salesData.length === 0) {
-                empty.style.display = 'block';
-                table.innerHTML = '';
-            } else {
-                empty.style.display = 'none';
+            // 定義唯一 App ID
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'yuna-sales-v1';
+
+            let salesData = [];
+            let target1 = 1000000;
+            let target2 = 2000000;
+            let currentUser = null;
+
+            // 認證流程 (規則 3: 先登入再查詢)
+            const initAuth = async () => {
+                try {
+                    statusEl.textContent = "⚙️ 正在連線至 Firebase...";
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("Auth Error:", error);
+                    statusEl.textContent = "❌ 連線失敗：請確認 API Key 是否有效。";
+                }
+            };
+
+            onAuthStateChanged(auth, (user) => {
+                currentUser = user;
+                if (user) {
+                    statusEl.innerHTML = `<span class="text-green-400">●</span> 雲端同步中 | ID: ${user.uid.substring(0, 10)}`;
+                    setupSync(user.uid, db, appId);
+                }
+            });
+
+            initAuth();
+
+            // 即時數據同步 (規則 1: 使用指定路徑)
+            function setupSync(userId, db, appId) {
+                // 1. 監聽銷售清單
+                const salesRef = collection(db, 'artifacts', appId, 'users', userId, 'sales');
+                onSnapshot(salesRef, (snapshot) => {
+                    salesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    updateUI();
+                }, (err) => {
+                    console.error("Firestore Error:", err);
+                    statusEl.textContent = "⚠️ 同步異常：請檢查 Firestore 權限。";
+                });
+
+                // 2. 監聽目標設定
+                const configRef = doc(db, 'artifacts', appId, 'users', userId, 'config', 'settings');
+                onSnapshot(configRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        target1 = data.target1 || 1000000;
+                        target2 = data.target2 || 2000000;
+                        document.getElementById('targetInput').value = target1;
+                        document.getElementById('target2Input').value = target2;
+                        updateUI();
+                    }
+                });
+            }
+
+            // 更新 UI 介面
+            function updateUI() {
+                const total = salesData.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+                const gap = Math.max(0, target2 - total);
+                const p1 = target1 > 0 ? Math.min(100, (total / target1 * 100)) : 0;
+                const p2 = target2 > 0 ? Math.min(100, (total / target2 * 100)) : 0;
+
+                document.getElementById('totalDisplay').textContent = `$${total.toLocaleString()}`;
+                document.getElementById('gapDisplay').textContent = `$${gap.toLocaleString()}`;
+                document.getElementById('percentDisplay').textContent = `${p1.toFixed(1)}%`;
+                document.getElementById('percentDisplay2').textContent = `${p2.toFixed(1)}%`;
+                document.getElementById('progressBar').style.width = `${p1}%`;
+                document.getElementById('progressBar2').style.width = `${p2}%`;
+
+                const table = document.getElementById('recordTable');
                 table.innerHTML = salesData
                     .sort((a, b) => new Date(b.date) - new Date(a.date))
                     .map((item) => `
                         <tr class="border-b border-white/5 hover:bg-white/5 transition-all">
-                            <td class="py-5 pl-4 text-white/70 font-mono">${item.date}</td>
-                            <td class="py-5 font-bold text-pink-200">$${(Number(item.amount) || 0).toLocaleString()}</td>
-                            <td class="py-5 text-right pr-4">
-                                <button onclick="deleteRecord('${item.id}')" class="w-8 h-8 rounded-full hover:bg-red-500/20 text-pink-200 opacity-30 hover:opacity-100 transition-all">✕</button>
+                            <td class="py-4 pl-4 text-white/70 font-mono">${item.date}</td>
+                            <td class="py-4 font-bold text-pink-200">$${(Number(item.amount) || 0).toLocaleString()}</td>
+                            <td class="py-4 text-right pr-4">
+                                <button onclick="deleteRecord('${item.id}')" class="text-pink-200 opacity-40 hover:opacity-100 px-2">✕</button>
                             </td>
                         </tr>
                     `).join('');
+                
+                document.getElementById('emptyState').style.display = salesData.length === 0 ? 'block' : 'none';
             }
-        };
 
-        window.addRecord = async function() {
-            if (!currentUser) return;
-            const date = document.getElementById('dateInput').value;
-            const amountInput = document.getElementById('amountInput');
-            const amount = parseFloat(amountInput.value);
-            if (!date || isNaN(amount)) return;
+            // 數據寫入
+            window.addRecord = async function() {
+                if (!currentUser) return;
+                const date = document.getElementById('dateInput').value;
+                const amountInput = document.getElementById('amountInput');
+                const amount = parseFloat(amountInput.value);
+                if (!date || isNaN(amount)) return;
 
-            try {
-                const salesCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'sales');
-                await setDoc(doc(salesCol), { date, amount, createdAt: Date.now() });
-                amountInput.value = '';
-            } catch (e) { console.error("Save Error:", e); }
-        };
+                try {
+                    const salesCol = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'sales');
+                    await setDoc(doc(salesCol), { date, amount, createdAt: Date.now() });
+                    amountInput.value = '';
+                } catch (e) { console.error("Write Error:", e); }
+            };
 
-        window.deleteRecord = async function(docId) {
-            if (!currentUser || !docId) return;
-            if (confirm('確定要刪除這筆紀錄嗎？')) {
+            window.deleteRecord = async function(docId) {
+                if (!currentUser || !docId) return;
+                if (!confirm('確定刪除紀錄？')) return;
                 try {
                     await deleteDoc(doc(db, 'artifacts', appId, 'users', currentUser.uid, 'sales', docId));
                 } catch (e) { console.error("Delete Error:", e); }
-            }
-        };
+            };
 
-        window.saveConfig = async function() {
-            if (!currentUser) return;
-            try {
-                const configRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'config', 'settings');
-                await setDoc(configRef, { 
-                    target1: parseFloat(document.getElementById('targetInput').value) || 0,
-                    target2: parseFloat(document.getElementById('target2Input').value) || 0
-                });
-            } catch (e) { console.error("Config Save Error:", e); }
-        };
+            window.saveConfig = async function() {
+                if (!currentUser) return;
+                try {
+                    const configRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'config', 'settings');
+                    await setDoc(configRef, { 
+                        target1: parseFloat(document.getElementById('targetInput').value) || 0,
+                        target2: parseFloat(document.getElementById('target2Input').value) || 0
+                    });
+                } catch (e) { console.error("Config Save Error:", e); }
+            };
 
-        document.getElementById('targetInput').onchange = saveConfig;
-        document.getElementById('target2Input').onchange = saveConfig;
+            document.getElementById('targetInput').onchange = window.saveConfig;
+            document.getElementById('target2Input').onchange = window.saveConfig;
+
+        } catch (err) {
+            console.error(err);
+        }
+
         document.getElementById('dateInput').valueAsDate = new Date();
     </script>
     <style>
         :root {
             --soft-pink: #ffb7c5;
-            --accent-pink: #f8a5c2;
             --deep-base: #1a1617;
             --card-bg: rgba(45, 38, 40, 0.7);
         }
         body {
             background-color: var(--deep-base);
             color: #fceef0;
-            font-family: "PingFang TC", "Heiti TC", "Microsoft JhengHei", sans-serif;
+            font-family: sans-serif;
             background-image: radial-gradient(circle at 50% -20%, #4a2f35 0%, #1a1617 100%);
             min-height: 100vh;
             margin: 0;
-            overflow-x: hidden;
         }
-        .pink-glow { text-shadow: 0 0 20px rgba(255, 183, 197, 0.5); }
         .card {
             background: var(--card-bg);
             backdrop-filter: blur(16px);
-            border: 1px solid rgba(255, 183, 197, 0.2);
-            transition: all 0.5s ease;
+            border: 1px solid rgba(255, 183, 197, 0.15);
         }
-        .card:hover { border-color: var(--soft-pink); transform: translateY(-5px); }
-        .progress-fill { transition: width 1.5s cubic-bezier(0.34, 1.56, 0.64, 1); }
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: var(--soft-pink); border-radius: 10px; }
     </style>
 </head>
-<body class="p-4 md:p-10">
-    <div class="max-w-6xl mx-auto">
-        <header class="mb-12 text-center">
-            <h1 class="text-5xl md:text-7xl font-black text-pink-100 pink-glow mb-4">Sales Diary</h1>
-            <div class="flex flex-col items-center gap-2">
-                <p class="text-pink-300 opacity-60 uppercase tracking-[0.5em] text-xs font-bold">雲端同步管理系統</p>
-                <span id="user-id-display" class="text-[10px] text-pink-400 opacity-50 font-mono italic text-center px-4 py-1 rounded-full bg-white/5 border border-white/5">正在連線...</span>
-            </div>
+<body class="p-6">
+    <div class="max-w-5xl mx-auto">
+        <header class="mb-10 text-center">
+            <h1 class="text-4xl font-black text-pink-100 mb-2">Sales Diary</h1>
+            <span id="user-id-display" class="text-[10px] text-pink-400 opacity-50 font-mono italic">初始化中...</span>
         </header>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10 text-center">
-            <div class="card rounded-[2.5rem] p-6">
-                <p class="text-pink-200 opacity-60 text-[10px] font-black mb-3 tracking-widest uppercase">基礎目標</p>
-                <input type="number" id="targetInput" class="bg-transparent text-2xl font-bold text-white w-full text-center outline-none">
+        <!-- 目標卡片 -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            <div class="card rounded-3xl p-5 text-center">
+                <p class="text-[10px] text-pink-200/50 mb-1 tracking-widest uppercase">基礎目標</p>
+                <input type="number" id="targetInput" value="1000000" class="bg-transparent text-xl font-bold text-white w-full text-center outline-none">
             </div>
-            <div class="card rounded-[2.5rem] p-6 border-pink-400/30">
-                <p class="text-pink-200 opacity-60 text-[10px] font-black mb-3 tracking-widest uppercase">挑戰目標</p>
-                <input type="number" id="target2Input" class="bg-transparent text-2xl font-bold text-white w-full text-center outline-none">
+            <div class="card rounded-3xl p-5 text-center">
+                <p class="text-[10px] text-pink-200/50 mb-1 tracking-widest uppercase">挑戰目標</p>
+                <input type="number" id="target2Input" value="2000000" class="bg-transparent text-xl font-bold text-white w-full text-center outline-none">
             </div>
-            <div class="card rounded-[2.5rem] p-6 bg-white/5">
-                <p class="text-pink-200 opacity-60 text-[10px] font-black mb-3 tracking-widest uppercase">目前總額</p>
-                <p class="text-3xl font-black text-white" id="totalDisplay">$0</p>
+            <div class="card rounded-3xl p-5 text-center bg-white/5">
+                <p class="text-[10px] text-pink-200/50 mb-1 tracking-widest uppercase">目前總額</p>
+                <p class="text-2xl font-black text-white" id="totalDisplay">$0</p>
             </div>
-            <div class="card rounded-[2.5rem] p-6">
-                <p class="text-pink-200 opacity-60 text-[10px] font-black mb-3 tracking-widest uppercase">挑戰差額</p>
-                <p class="text-2xl font-bold text-pink-200" id="gapDisplay">$0</p>
+            <div class="card rounded-3xl p-5 text-center">
+                <p class="text-[10px] text-pink-200/50 mb-1 tracking-widest uppercase">剩餘差額</p>
+                <p class="text-xl font-bold text-pink-200" id="gapDisplay">$0</p>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-12">
-            <div class="card rounded-3xl p-7">
-                <div class="flex justify-between items-end mb-4">
-                    <span class="text-xs font-bold text-pink-200 opacity-70 uppercase tracking-widest">基礎進度</span>
-                    <span id="percentDisplay" class="text-2xl font-black text-pink-200">0%</span>
-                </div>
-                <div class="h-4 w-full bg-white/5 rounded-full overflow-hidden">
-                    <div id="progressBar" class="progress-fill h-full bg-pink-300" style="width: 0%"></div>
+        <!-- 進度條 -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+            <div class="card rounded-2xl p-6">
+                <div class="flex justify-between mb-2"><span class="text-xs text-pink-200/60">基礎進度</span><span id="percentDisplay" class="font-bold">0%</span></div>
+                <div class="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                    <div id="progressBar" class="h-full bg-pink-300 transition-all duration-1000" style="width: 0%"></div>
                 </div>
             </div>
-            <div class="card rounded-3xl p-7 border-pink-400/30">
-                <div class="flex justify-between items-end mb-4">
-                    <span class="text-xs font-bold text-pink-200 opacity-70 uppercase tracking-widest">挑戰進度</span>
-                    <span id="percentDisplay2" class="text-2xl font-black text-pink-400">0%</span>
-                </div>
-                <div class="h-4 w-full bg-white/5 rounded-full overflow-hidden">
-                    <div id="progressBar2" class="progress-fill h-full bg-gradient-to-r from-pink-300 to-pink-500" style="width: 0%"></div>
+            <div class="card rounded-2xl p-6">
+                <div class="flex justify-between mb-2"><span class="text-xs text-pink-200/60">挑戰進度</span><span id="percentDisplay2" class="font-bold">0%</span></div>
+                <div class="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                    <div id="progressBar2" class="h-full bg-pink-500 transition-all duration-1000" style="width: 0%"></div>
                 </div>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-10">
-            <section class="card rounded-[2.5rem] p-8">
-                <h2 class="text-xl font-bold mb-6 flex items-center gap-3"><span class="w-1.5 h-6 bg-pink-300 rounded-full"></span> 新增營業數據</h2>
-                <div class="space-y-6">
-                    <div class="space-y-2">
-                        <label class="text-[10px] text-pink-200 opacity-40 uppercase tracking-widest ml-2">日期</label>
-                        <input type="date" id="dateInput" class="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-white outline-none focus:border-pink-300 transition-all">
-                    </div>
-                    <div class="space-y-2">
-                        <label class="text-[10px] text-pink-200 opacity-40 uppercase tracking-widest ml-2">金額</label>
-                        <input type="number" id="amountInput" placeholder="請輸入金額" class="w-full bg-white/5 border border-white/10 rounded-2xl px-5 py-4 text-white text-lg font-bold outline-none focus:border-pink-300 transition-all">
-                    </div>
-                    <button onclick="addRecord()" class="w-full bg-pink-300 hover:bg-pink-200 text-gray-900 font-black py-5 rounded-2xl shadow-xl shadow-pink-500/20 uppercase tracking-widest">儲存至雲端</button>
+        <!-- 輸入與清單 -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <section class="card rounded-3xl p-8">
+                <h2 class="text-lg font-bold mb-6">新增數據</h2>
+                <div class="space-y-4">
+                    <input type="date" id="dateInput" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white outline-none">
+                    <input type="number" id="amountInput" placeholder="金額" class="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white text-lg font-bold outline-none">
+                    <button onclick="addRecord()" class="w-full bg-pink-300 hover:bg-pink-200 text-gray-900 font-bold py-4 rounded-xl shadow-lg shadow-pink-500/10">儲存</button>
                 </div>
             </section>
-            <section class="card rounded-[2.5rem] p-6 flex flex-col min-h-[450px]">
-                <h2 class="text-xl font-bold mb-6 flex items-center gap-3 pl-2"><span class="w-1.5 h-6 bg-pink-300 rounded-full"></span> 雲端紀錄清單</h2>
-                <div class="flex-grow overflow-y-auto custom-scrollbar pr-2">
+            
+            <section class="card rounded-3xl p-6 h-[400px] flex flex-col">
+                <h2 class="text-lg font-bold mb-4">歷史紀錄</h2>
+                <div class="flex-grow overflow-y-auto pr-2 custom-scrollbar">
                     <table class="w-full text-left">
-                        <thead class="text-pink-200 opacity-40 text-[10px] font-black uppercase tracking-widest border-b border-white/10">
-                            <tr><th class="pb-4 pl-4 font-normal">日期</th><th class="pb-4 font-normal">金額</th><th class="pb-4 text-right pr-4 font-normal">操作</th></tr>
-                        </thead>
-                        <tbody id="recordTable" class="text-sm"></tbody>
+                        <tbody id="recordTable"></tbody>
                     </table>
-                    <div id="emptyState" class="py-24 text-center text-pink-200 opacity-20 italic">讀取雲端數據中...</div>
+                    <div id="emptyState" class="py-20 text-center text-pink-200/20 italic">目前沒有紀錄</div>
                 </div>
             </section>
         </div>
